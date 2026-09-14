@@ -336,24 +336,44 @@
 
   <!-- OBJEKTVERWALTUNG -->
   <div class="card" id="objekt-card">
-    <h2>Objekte <span class="toggle" onclick="toggleCard('objekt-card','objekt-toggle')" id="objekt-toggle">ausblenden</span></h2>
+    <h2 id="objekt-form-title">Objekte <span class="toggle" onclick="toggleCard('objekt-card','objekt-toggle')" id="objekt-toggle">ausblenden</span></h2>
     <div class="body-content" id="objekt-body">
       <div id="objekt-list"></div>
+      <input type="hidden" id="edit-objekt-id">
       <div class="grid" style="margin-top:10px;">
         <div class="field">
           <label>Kunde</label>
           <select id="new-objekt-kunde"></select>
         </div>
         <div class="field">
-          <label>Neues Objekt</label>
+          <label>Objekt-Name</label>
           <input type="text" id="new-objekt-name" placeholder="z.B. Neubau Müller, Näfels">
         </div>
         <div class="field full">
-          <label>Standard-Stundenansatz (CHF)</label>
+          <label>Abrechnungsart</label>
+          <select id="new-objekt-billing" onchange="onObjektBillingChange()">
+            <option value="hourly">Stundenansatz</option>
+            <option value="flat">Pauschale</option>
+          </select>
+        </div>
+        <div class="field" id="objekt-rate-field">
+          <label id="objekt-rate-label">Standard-Stundenansatz (CHF)</label>
           <input type="number" id="new-objekt-rate" min="0" step="0.5" placeholder="85">
         </div>
+        <div class="field hidden" id="objekt-flat-field">
+          <label>Pauschalbetrag (CHF)</label>
+          <input type="number" id="new-objekt-flatamount" min="0" step="10" placeholder="1000">
+        </div>
+        <div class="field hidden full" id="objekt-flatpaid-field">
+          <label>Bereits verrechnet (CHF)</label>
+          <input type="number" id="new-objekt-flatpaid" min="0" step="10" placeholder="0">
+          <div class="rate-hint">Manuell nachführen, sobald du eine Teilrechnung gestellt hast.</div>
+        </div>
       </div>
-      <button class="btn-secondary" style="width:100%" onclick="addObjekt()">+ Objekt hinzufügen</button>
+      <button class="btn-secondary" style="width:100%" onclick="addObjekt()" id="objekt-save-btn">+ Objekt hinzufügen</button>
+      <div class="row-actions" id="objekt-cancel-row" style="display:none;">
+        <button class="btn-secondary" onclick="cancelObjektEdit()">Abbrechen</button>
+      </div>
     </div>
   </div>
 
@@ -391,13 +411,19 @@
         <input type="number" id="f-hours-manual" min="0" step="0.25" placeholder="z.B. 5.5">
       </div>
       <div class="field">
-        <label>Stundenansatz (CHF)</label>
+        <label id="f-rate-label">Stundenansatz (CHF)</label>
         <input type="number" id="f-rate" min="0" step="0.5">
         <div class="rate-hint" id="rate-hint"></div>
       </div>
       <div class="field">
         <label>Vorschau Stunden</label>
         <input type="text" id="hours-preview" readonly style="opacity:0.8">
+      </div>
+      <div class="field full hidden" id="f-zusatz-field">
+        <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+          <input type="checkbox" id="f-zusatz" style="width:auto;">
+          Zusatzaufwand – zusätzlich zur Pauschale verrechnen
+        </label>
       </div>
     </div>
     <button class="btn-primary" id="save-btn" onclick="saveEntry()">Eintrag speichern</button>
@@ -427,8 +453,17 @@
   <div class="card">
     <h2>Rapport als PDF</h2>
     <div class="field">
+      <label>Objekt (optional – grenzt auf ein Objekt ein)</label>
+      <select id="pdf-objekt" onchange="onPdfObjektChange()"></select>
+    </div>
+    <div class="field">
       <label>Kunde (für Adresse im PDF-Kopf)</label>
       <select id="pdf-kunde" onchange="onPdfKundeChange()"></select>
+    </div>
+    <div class="field hidden" id="pdf-teilrechnung-field">
+      <label>Pauschale – Betrag dieser Teilrechnung (CHF)</label>
+      <input type="number" id="pdf-teilrechnung" min="0" step="10">
+      <div class="rate-hint" id="pdf-rest-hint"></div>
     </div>
     <div class="date-range">
       <div class="field">
@@ -708,19 +743,64 @@ function kundeName(id){
   return k ? k.name : '';
 }
 
+function onObjektBillingChange(){
+  const billing = document.getElementById('new-objekt-billing').value;
+  const rateLabel = document.getElementById('objekt-rate-label');
+  document.getElementById('objekt-flat-field').classList.toggle('hidden', billing!=='flat');
+  document.getElementById('objekt-flatpaid-field').classList.toggle('hidden', billing!=='flat');
+  rateLabel.textContent = billing==='flat' ? 'Zusatzaufwand-Stundenansatz (CHF)' : 'Standard-Stundenansatz (CHF)';
+}
+
+function resetObjektForm(){
+  document.getElementById('edit-objekt-id').value = '';
+  document.getElementById('new-objekt-name').value = '';
+  document.getElementById('new-objekt-rate').value = '';
+  document.getElementById('new-objekt-billing').value = 'hourly';
+  document.getElementById('new-objekt-flatamount').value = '';
+  document.getElementById('new-objekt-flatpaid').value = '';
+  onObjektBillingChange();
+  document.getElementById('objekt-form-title').firstChild.textContent = 'Objekte ';
+  document.getElementById('objekt-save-btn').textContent = '+ Objekt hinzufügen';
+  document.getElementById('objekt-cancel-row').style.display = 'none';
+}
+
+function cancelObjektEdit(){ resetObjektForm(); }
+
 async function addObjekt(){
   const name = document.getElementById('new-objekt-name').value.trim();
   const rate = document.getElementById('new-objekt-rate').value;
   const kundeId = document.getElementById('new-objekt-kunde').value;
+  const billingType = document.getElementById('new-objekt-billing').value;
+  const flatAmount = document.getElementById('new-objekt-flatamount').value;
+  const flatPaid = document.getElementById('new-objekt-flatpaid').value;
+  const editId = document.getElementById('edit-objekt-id').value;
+
   if(!kundeId){ showToast('Bitte zuerst einen Kunden anlegen und auswählen'); return; }
   if(!name){ showToast('Objektname fehlt'); return; }
-  objekte.push({id: uid(), name, rate: rate ? Number(rate) : 0, kundeId});
+  if(billingType==='flat' && !flatAmount){ showToast('Bitte Pauschalbetrag eintragen'); return; }
+
+  const objekt = {
+    id: editId || uid(),
+    name, kundeId,
+    rate: rate ? Number(rate) : 0,
+    billingType,
+    flatAmount: billingType==='flat' ? Number(flatAmount) : null,
+    flatPaid: billingType==='flat' ? Number(flatPaid||0) : 0
+  };
+
+  if(editId){
+    const idx = objekte.findIndex(o=>o.id===editId);
+    if(idx>-1) objekte[idx] = objekt;
+  }else{
+    objekte.push(objekt);
+  }
+
   await persistObjekte();
-  document.getElementById('new-objekt-name').value = '';
-  document.getElementById('new-objekt-rate').value = '';
+  resetObjektForm();
   renderObjektList();
   renderObjektSelects();
-  showToast('Objekt hinzugefügt');
+  renderEntries();
+  showToast(editId ? 'Objekt aktualisiert' : 'Objekt hinzugefügt');
 }
 
 async function deleteObjekt(id){
@@ -737,16 +817,20 @@ async function deleteObjekt(id){
 function editObjektPrompt(id){
   const o = objekte.find(x=>x.id===id);
   if(!o) return;
-  const newName = prompt('Objektname:', o.name);
-  if(newName===null) return;
-  const newRate = prompt('Standard-Stundenansatz (CHF):', o.rate||0);
-  if(newRate===null) return;
-  o.name = newName.trim() || o.name;
-  o.rate = Number(newRate)||0;
-  persistObjekte();
-  renderObjektList();
-  renderObjektSelects();
-  renderEntries();
+  document.getElementById('edit-objekt-id').value = o.id;
+  document.getElementById('new-objekt-kunde').value = o.kundeId;
+  document.getElementById('new-objekt-name').value = o.name;
+  document.getElementById('new-objekt-rate').value = o.rate || '';
+  document.getElementById('new-objekt-billing').value = o.billingType || 'hourly';
+  document.getElementById('new-objekt-flatamount').value = o.flatAmount || '';
+  document.getElementById('new-objekt-flatpaid').value = o.flatPaid || '';
+  onObjektBillingChange();
+  document.getElementById('objekt-form-title').firstChild.textContent = 'Objekt bearbeiten ';
+  document.getElementById('objekt-save-btn').textContent = 'Änderungen speichern';
+  document.getElementById('objekt-cancel-row').style.display = 'flex';
+  const card = document.getElementById('objekt-card');
+  if(card.classList.contains('collapsed')) toggleCard('objekt-card','objekt-toggle');
+  window.scrollTo({top:0, behavior:'smooth'});
 }
 
 function renderObjektList(){
@@ -755,27 +839,38 @@ function renderObjektList(){
     list.innerHTML = '<div class="rate-hint">Noch keine Objekte angelegt.</div>';
     return;
   }
-  list.innerHTML = objekte.map(o=>`
+  list.innerHTML = objekte.map(o=>{
+    let info;
+    if(o.billingType==='flat'){
+      const rest = (o.flatAmount||0) - (o.flatPaid||0);
+      info = `Pauschale CHF ${(o.flatAmount||0).toFixed(2)} (Rest CHF ${rest.toFixed(2)}) · Zusatz CHF ${(o.rate||0).toFixed(2)}/h`;
+    }else{
+      info = `CHF ${(o.rate||0).toFixed(2)} / h`;
+    }
+    return `
     <div class="objekt-row">
       <div>
         <div class="om-name">${escapeHtml(o.name)}</div>
-        <div class="om-rate">${escapeHtml(kundeName(o.kundeId) || 'kein Kunde')} · CHF ${(o.rate||0).toFixed(2)} / h</div>
+        <div class="om-rate">${escapeHtml(kundeName(o.kundeId) || 'kein Kunde')} · ${info}</div>
       </div>
       <div class="om-actions">
         <button class="btn-edit" onclick="editObjektPrompt('${o.id}')">Bearb.</button>
         <button class="btn-delete" onclick="deleteObjekt('${o.id}')">Löschen</button>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function renderObjektSelects(){
   const fSel = document.getElementById('f-objekt');
   const filterSel = document.getElementById('objekt-filter');
+  const pdfObjektSel = document.getElementById('pdf-objekt');
   const currentF = fSel.value;
   const currentFilter = filterSel.value;
+  const currentPdfObjekt = pdfObjektSel.value;
 
-  fSel.innerHTML = objekte.map(o=>`<option value="${o.id}">${escapeHtml(o.name)} (${escapeHtml(kundeName(o.kundeId))})</option>`).join('')
-    || '<option value="">Zuerst Objekt anlegen</option>';
+  const objOpts = objekte.map(o=>`<option value="${o.id}">${escapeHtml(o.name)} (${escapeHtml(kundeName(o.kundeId))})</option>`).join('');
+  fSel.innerHTML = objOpts || '<option value="">Zuerst Objekt anlegen</option>';
   if(objekte.some(o=>o.id===currentF)) fSel.value = currentF;
 
   const kundeFilterVal = document.getElementById('kunde-filter').value;
@@ -783,6 +878,9 @@ function renderObjektSelects(){
   filterSel.innerHTML = '<option value="all">Alle Objekte</option>' +
     objForFilter.map(o=>`<option value="${o.id}">${escapeHtml(o.name)}</option>`).join('');
   if(currentFilter) filterSel.value = currentFilter;
+
+  pdfObjektSel.innerHTML = '<option value="all">Alle Objekte / gemischt</option>' + objOpts;
+  if(objekte.some(o=>o.id===currentPdfObjekt)) pdfObjektSel.value = currentPdfObjekt;
 
   onObjektChange();
 }
@@ -793,20 +891,55 @@ function onKundeFilterChange(){
   renderEntries();
 }
 
-function onPdfKundeChange(){ /* just for future use, filtering happens at generate-time */ }
+function onPdfKundeChange(){ /* Kunde manuell gewählt – Objekt-Filter bleibt unabhängig */ }
+
+function onPdfObjektChange(){
+  const objektId = document.getElementById('pdf-objekt').value;
+  const teilField = document.getElementById('pdf-teilrechnung-field');
+  const teilInput = document.getElementById('pdf-teilrechnung');
+  const restHint = document.getElementById('pdf-rest-hint');
+  if(objektId==='all'){
+    teilField.classList.add('hidden');
+    return;
+  }
+  const o = objekte.find(x=>x.id===objektId);
+  if(!o) return;
+  document.getElementById('pdf-kunde').value = o.kundeId;
+  if(o.billingType==='flat'){
+    const rest = (o.flatAmount||0) - (o.flatPaid||0);
+    teilInput.value = rest > 0 ? rest.toFixed(2) : 0;
+    restHint.textContent = `Pauschale CHF ${(o.flatAmount||0).toFixed(2)} · bereits verrechnet CHF ${(o.flatPaid||0).toFixed(2)} · offen CHF ${rest.toFixed(2)}`;
+    teilField.classList.remove('hidden');
+  }else{
+    teilField.classList.add('hidden');
+  }
+}
 
 function onObjektChange(){
   const objektId = document.getElementById('f-objekt').value;
   const o = objekte.find(x=>x.id===objektId);
   const rateField = document.getElementById('f-rate');
+  const rateLabel = document.getElementById('f-rate-label');
   const hint = document.getElementById('rate-hint');
+  const zusatzField = document.getElementById('f-zusatz-field');
   if(o){
     if(!rateField.dataset.userEdited){
       rateField.value = o.rate || '';
     }
-    hint.textContent = 'Standard für dieses Objekt: CHF ' + (o.rate||0).toFixed(2) + '/h – bei Bedarf überschreiben';
+    if(o.billingType==='flat'){
+      zusatzField.classList.remove('hidden');
+      rateLabel.textContent = 'Zusatzaufwand-Stundenansatz (CHF)';
+      const rest = (o.flatAmount||0) - (o.flatPaid||0);
+      hint.textContent = `Pauschale CHF ${(o.flatAmount||0).toFixed(2)} (Rest CHF ${rest.toFixed(2)}) · Zusatz CHF ${(o.rate||0).toFixed(2)}/h – nur bei angehakter Zusatzaufwand-Box verrechnet`;
+    }else{
+      zusatzField.classList.add('hidden');
+      document.getElementById('f-zusatz').checked = false;
+      rateLabel.textContent = 'Stundenansatz (CHF)';
+      hint.textContent = 'Standard für dieses Objekt: CHF ' + (o.rate||0).toFixed(2) + '/h – bei Bedarf überschreiben';
+    }
   }else{
     hint.textContent = '';
+    zusatzField.classList.add('hidden');
   }
 }
 document.addEventListener('DOMContentLoaded', ()=>{
@@ -837,6 +970,7 @@ function resetForm(){
   document.getElementById('f-hours-manual').value = '';
   document.getElementById('f-rate').value = '';
   document.getElementById('f-rate').dataset.userEdited = '';
+  document.getElementById('f-zusatz').checked = false;
   document.getElementById('hours-preview').value = '';
   document.getElementById('form-title').textContent = 'Neuer Eintrag';
   document.getElementById('save-btn').textContent = 'Eintrag speichern';
@@ -853,6 +987,7 @@ async function saveEntry(){
   const pause = document.getElementById('f-pause').value;
   const manual = document.getElementById('f-hours-manual').value;
   const rate = document.getElementById('f-rate').value;
+  const zusatz = document.getElementById('f-zusatz').checked;
   const editId = document.getElementById('edit-id').value;
 
   if(!date || !objektId){ showToast('Datum und Objekt sind Pflicht'); return; }
@@ -863,6 +998,7 @@ async function saveEntry(){
   else { hours = calcHours(start, end, pause); }
   if(!hours || hours<=0){ showToast('Stunden fehlen oder 0 – Zeiten oder Stunden eintragen'); return; }
 
+  const o = objekte.find(x=>x.id===objektId);
   const entry = {
     id: editId || uid(),
     date, objektId, arbeit,
@@ -870,6 +1006,7 @@ async function saveEntry(){
     pause: Number(pause||0),
     hoursManual: manual ? Number(manual) : null,
     rate: rate ? Number(rate) : 0,
+    zusatz: (o && o.billingType==='flat') ? zusatz : true,
     hours
   };
 
@@ -899,6 +1036,8 @@ function editEntry(id){
   document.getElementById('f-hours-manual').value = e.hoursManual || '';
   document.getElementById('f-rate').value = e.rate || '';
   document.getElementById('f-rate').dataset.userEdited = '1';
+  onObjektChange();
+  document.getElementById('f-zusatz').checked = !!e.zusatz;
   recalcPreview();
   document.getElementById('form-title').textContent = 'Eintrag bearbeiten';
   document.getElementById('save-btn').textContent = 'Änderungen speichern';
@@ -923,6 +1062,14 @@ function entryKundeName(objektId){
   const o = objekte.find(x=>x.id===objektId);
   if(!o) return '–';
   return kundeName(o.kundeId) || '–';
+}
+function entryIsFlat(e){
+  const o = objekte.find(x=>x.id===e.objektId);
+  return o && o.billingType==='flat';
+}
+function entryBetrag(e){
+  if(entryIsFlat(e) && !e.zusatz) return 0;
+  return e.hours * (e.rate||0);
 }
 
 function monthKey(dateStr){ return dateStr.slice(0,7); }
@@ -961,7 +1108,7 @@ function renderEntries(){
   document.getElementById('summary-label').textContent =
     (monthFilter==='all' ? 'Total alle Einträge' : 'Total ' + monthLabel(monthFilter));
   const totalH = filtered.reduce((s,e)=>s+e.hours,0);
-  const totalCHF = filtered.reduce((s,e)=>s+(e.hours*(e.rate||0)),0);
+  const totalCHF = filtered.reduce((s,e)=>s+entryBetrag(e),0);
   document.getElementById('total-hours').textContent = totalH.toFixed(2) + ' h';
   document.getElementById('total-betrag').textContent = totalCHF>0 ? ('CHF ' + totalCHF.toFixed(2)) : '';
 
@@ -979,8 +1126,11 @@ function renderEntries(){
       lastMonth = mk;
     }
     const dateFmt = new Date(e.date+'T00:00:00').toLocaleDateString('de-CH', {weekday:'short', day:'2-digit', month:'2-digit', year:'numeric'});
-    const betrag = (e.hours*(e.rate||0));
+    const betrag = entryBetrag(e);
     const zeit = e.hoursManual ? `${e.hours.toFixed(2)} h (manuell)` : `${e.start}–${e.end} · Pause ${e.pause} Min.`;
+    const isFlat = entryIsFlat(e);
+    const badge = isFlat ? (e.zusatz ? ' · <strong style="color:var(--accent-soft);">Zusatzaufwand</strong>' : ' · Pauschal (Dokumentation)') : '';
+    const betragTxt = isFlat ? (e.zusatz ? ` · CHF ${(e.rate||0).toFixed(2)}/h · Betrag CHF ${betrag.toFixed(2)}` : '') : (e.rate ? ` · CHF ${(e.rate||0).toFixed(2)}/h · Betrag CHF ${betrag.toFixed(2)}` : '');
     html += `
       <div class="entry">
         <div class="entry-top">
@@ -988,7 +1138,7 @@ function renderEntries(){
           <div class="entry-hours">${e.hours.toFixed(2)} h</div>
         </div>
         <span class="entry-objekt">${escapeHtml(objektName(e.objektId))} · ${escapeHtml(entryKundeName(e.objektId))}</span>
-        <div class="entry-meta">${zeit} · CHF ${(e.rate||0).toFixed(2)}/h${e.rate ? ' · Betrag CHF '+betrag.toFixed(2) : ''}</div>
+        <div class="entry-meta">${zeit}${betragTxt}${badge}</div>
         <div class="entry-note">${escapeHtml(e.arbeit)}</div>
         <div class="entry-buttons">
           <button class="btn-edit" onclick="editEntry('${e.id}')">Bearbeiten</button>
@@ -1029,15 +1179,22 @@ function generatePDF(){
   const von = document.getElementById('pdf-von').value;
   const bis = document.getElementById('pdf-bis').value;
   const kundeFilterId = document.getElementById('pdf-kunde').value;
+  const objektFilterId = document.getElementById('pdf-objekt').value;
   if(!von || !bis){ showToast('Bitte Zeitraum wählen'); return; }
 
   let filtered = entries.filter(e=> e.date>=von && e.date<=bis);
-  if(kundeFilterId && kundeFilterId!=='all'){
+  if(objektFilterId && objektFilterId!=='all'){
+    filtered = filtered.filter(e=>e.objektId===objektFilterId);
+  }else if(kundeFilterId && kundeFilterId!=='all'){
     const objIds = objekte.filter(o=>o.kundeId===kundeFilterId).map(o=>o.id);
     filtered = filtered.filter(e=>objIds.includes(e.objektId));
   }
   filtered.sort((a,b)=> a.date.localeCompare(b.date) || (a.start||'').localeCompare(b.start||''));
   if(filtered.length===0){ showToast('Keine Einträge für diese Auswahl'); return; }
+
+  const pdfObjekt = (objektFilterId && objektFilterId!=='all') ? objekte.find(o=>o.id===objektFilterId) : null;
+  const isFlatPdf = pdfObjekt && pdfObjekt.billingType==='flat';
+  const teilrechnungBetrag = isFlatPdf ? Number(document.getElementById('pdf-teilrechnung').value || 0) : 0;
 
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({unit:'mm', format:'a4'});
@@ -1071,6 +1228,12 @@ function generatePDF(){
         doc.text(line, pageWidth-14, ay, {align:'right'});
         ay += 4.5;
       });
+      if(isFlatPdf){
+        doc.setTextColor(232,163,61);
+        doc.text(`Pauschalauftrag: CHF ${(pdfObjekt.flatAmount||0).toFixed(2)}`, pageWidth-14, ay, {align:'right'});
+        doc.setTextColor(20,30,45);
+        ay += 4.5;
+      }
       headerBottomY = Math.max(headerBottomY, ay + 4);
     }
   }
@@ -1081,22 +1244,36 @@ function generatePDF(){
     const tag = dayNames[d.getDay()];
     const datum = d.toLocaleDateString('de-CH');
     const zeit = e.hoursManual ? '–' : `${e.start}–${e.end}`;
+    const flat = entryIsFlat(e);
     const rate = e.rate||0;
-    const betrag = e.hours*rate;
+    const betrag = entryBetrag(e);
+    const objLabel = objektName(e.objektId) + (flat ? (e.zusatz ? ' (Zusatz)' : ' (Pauschal)') : '');
     return [
-      tag, datum, objektName(e.objektId), e.arbeit, zeit,
-      e.hours.toFixed(2), rate ? rate.toFixed(2) : '–', rate ? betrag.toFixed(2) : '–'
+      tag, datum, objLabel, e.arbeit, zeit,
+      e.hours.toFixed(2),
+      (flat && !e.zusatz) ? '–' : (rate ? rate.toFixed(2) : '–'),
+      (flat && !e.zusatz) ? '–' : (rate ? betrag.toFixed(2) : '–')
     ];
   });
 
   const totalHours = filtered.reduce((s,e)=>s+e.hours,0);
-  const totalBetrag = filtered.reduce((s,e)=>s+(e.hours*(e.rate||0)),0);
+  const mehraufwandHours = filtered.filter(e=>entryIsFlat(e) && e.zusatz).reduce((s,e)=>s+e.hours,0);
+  const mehraufwandBetrag = filtered.filter(e=>entryIsFlat(e) && e.zusatz).reduce((s,e)=>s+entryBetrag(e),0);
+  const normalBetrag = filtered.filter(e=>!entryIsFlat(e)).reduce((s,e)=>s+entryBetrag(e),0);
+
+  let footRow;
+  if(isFlatPdf){
+    footRow = [['','','','','Total Std.', totalHours.toFixed(2), '', '']];
+  }else{
+    const totalBetrag = normalBetrag + mehraufwandBetrag;
+    footRow = [['','','','','Total', totalHours.toFixed(2), '', totalBetrag>0 ? totalBetrag.toFixed(2) : '–']];
+  }
 
   doc.autoTable({
     startY: headerBottomY,
     head: [['Tag','Datum','Objekt','Ausgeführte Arbeit','Zeit','Std.','Ansatz','Betrag CHF']],
     body: rows,
-    foot: [['','','','','Total', totalHours.toFixed(2), '', totalBetrag>0 ? totalBetrag.toFixed(2) : '–']],
+    foot: footRow,
     styles: { fontSize: 8, cellPadding: 2.2, textColor: [30,40,55] },
     headStyles: { fillColor: [15,32,56], textColor: [255,255,255], fontStyle:'bold' },
     footStyles: { fillColor: [232,163,61], textColor: [15,32,56], fontStyle:'bold' },
@@ -1108,7 +1285,35 @@ function generatePDF(){
     margin: {left:14, right:14}
   });
 
-  const finalY = doc.lastAutoTable.finalY + 10;
+  let finalY = doc.lastAutoTable.finalY + 8;
+
+  if(isFlatPdf){
+    const rest = (pdfObjekt.flatAmount||0) - (pdfObjekt.flatPaid||0) - teilrechnungBetrag;
+    const totalRechnung = teilrechnungBetrag + mehraufwandBetrag;
+    doc.setFontSize(9);
+    doc.setTextColor(20,30,45);
+    doc.text('Pauschale – diese Teilrechnung:', pageWidth-90, finalY);
+    doc.text('CHF ' + teilrechnungBetrag.toFixed(2), pageWidth-14, finalY, {align:'right'});
+    finalY += 5;
+    doc.setFontSize(8);
+    doc.setTextColor(130,140,155);
+    doc.text(`(Rest nach dieser Rechnung: CHF ${rest.toFixed(2)})`, pageWidth-14, finalY, {align:'right'});
+    finalY += 6;
+    doc.setFontSize(9);
+    doc.setTextColor(20,30,45);
+    doc.text(`Mehraufwand (${mehraufwandHours.toFixed(2)} h):`, pageWidth-90, finalY);
+    doc.text('CHF ' + mehraufwandBetrag.toFixed(2), pageWidth-14, finalY, {align:'right'});
+    finalY += 3;
+    doc.setDrawColor(200,200,200);
+    doc.line(pageWidth-90, finalY, pageWidth-14, finalY);
+    finalY += 5;
+    doc.setFont(undefined,'bold');
+    doc.text('Total diese Rechnung:', pageWidth-90, finalY);
+    doc.text('CHF ' + totalRechnung.toFixed(2), pageWidth-14, finalY, {align:'right'});
+    doc.setFont(undefined,'normal');
+    finalY += 10;
+  }
+
   doc.setFontSize(8);
   doc.setTextColor(130,140,155);
   doc.text('Leitwärch Schläpfer · Rapport erstellt am ' + new Date().toLocaleDateString('de-CH'), 14, finalY);
@@ -1132,10 +1337,13 @@ function exportCSV(){
   if(objektFilter && objektFilter!=='all') rows = rows.filter(e=>e.objektId===objektFilter);
   rows.sort((a,b)=>a.date.localeCompare(b.date));
 
-  let csv = 'Datum;Kunde;Objekt;Ausgeführte Arbeit;Von;Bis;Pause (Min);Stunden;Stundensatz;Betrag CHF\n';
+  let csv = 'Datum;Kunde;Objekt;Ausgeführte Arbeit;Von;Bis;Pause (Min);Stunden;Typ;Stundensatz;Betrag CHF\n';
   rows.forEach(e=>{
-    const betrag = e.rate ? (e.hours*e.rate).toFixed(2) : '';
-    csv += [e.date, entryKundeName(e.objektId), objektName(e.objektId), (e.arbeit||'').replace(/;/g,','), e.start, e.end, e.pause, e.hours.toFixed(2), e.rate||'', betrag].join(';') + '\n';
+    const flat = entryIsFlat(e);
+    const typ = flat ? (e.zusatz ? 'Zusatzaufwand' : 'Pauschal') : 'Normal';
+    const betrag = entryBetrag(e);
+    const betragTxt = (flat && !e.zusatz) ? '' : betrag.toFixed(2);
+    csv += [e.date, entryKundeName(e.objektId), objektName(e.objektId), (e.arbeit||'').replace(/;/g,','), e.start, e.end, e.pause, e.hours.toFixed(2), typ, e.rate||'', betragTxt].join(';') + '\n';
   });
 
   const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
